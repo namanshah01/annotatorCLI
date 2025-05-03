@@ -1,3 +1,4 @@
+import psycopg2
 import sqlite3
 import hashlib
 import getpass
@@ -6,11 +7,22 @@ import os
 import requests
 import random
 from datetime import datetime
+from dotenv import load_dotenv
 
 # ------------------ UTILS ------------------
-DB_FILE = 'platform.db'
+load_dotenv()
+
 LIGHTHOUSE_API_KEY = "03e85330.b6a227873ffa49d9a9b6899782736cdf"
 LIGHTHOUSE_ENDPOINT = "https://node.lighthouse.storage/api/v0/add"
+
+def get_db_connection():
+    return psycopg2.connect(
+        host=os.getenv("SUPABASE_DB_HOST"),
+        port=5432,
+        database="postgres",
+        user="postgres",
+        password=os.getenv("SUPABASE_DB_PASSWORD")
+    )
 
 def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
@@ -22,18 +34,19 @@ def register(role):
     password = getpass.getpass("Password: ")
     email = input("Email (optional): ")
 
-    conn = sqlite3.connect(DB_FILE)
+    # conn = sqlite3.connect(DB_FILE)
+    conn = get_db_connection()
     c = conn.cursor()
     table = 'users' if role == 'annotator' else 'contributors'
 
     try:
         c.execute(f'''
             INSERT INTO {table} (username, password_hash, email)
-            VALUES (?, ?, ?)
+            VALUES (%s, %s, %s)
         ''', (username, hash_password(password), email))
         conn.commit()
         print("Registration successful.\n")
-    except sqlite3.IntegrityError:
+    except psycopg2.IntegrityError:
         print("Username already exists.\n")
     conn.close()
 
@@ -42,12 +55,13 @@ def login(role):
     username = input("Username: ")
     password = getpass.getpass("Password: ")
 
-    conn = sqlite3.connect(DB_FILE)
+    # conn = sqlite3.connect(DB_FILE)
+    conn = get_db_connection()
     c = conn.cursor()
     table = 'users' if role == 'annotator' else 'contributors'
 
     c.execute(f'''
-        SELECT id, password_hash FROM {table} WHERE username = ?
+        SELECT id, password_hash FROM {table} WHERE username = %s
     ''', (username,))
     row = c.fetchone()
     conn.close()
@@ -141,7 +155,8 @@ def upload_file_to_ipfs(filepath):
 
 def upload_dataset(session):
     contributor_id = session['id']
-    conn = sqlite3.connect(DB_FILE)
+    # conn = sqlite3.connect(DB_FILE)
+    conn = get_db_connection()
     c = conn.cursor()
 
     name = input("Dataset name: ")
@@ -159,21 +174,22 @@ def upload_dataset(session):
     value_per_file = total_value / len(files)
 
     # Check contributor wallet balance
-    c.execute("SELECT wallet_balance FROM contributors WHERE id = ?", (contributor_id,))
+    c.execute("SELECT wallet_balance FROM contributors WHERE id = %s", (contributor_id,))
     balance = c.fetchone()[0]
     if balance < total_value:
         print(f"Insufficient balance. Available: {balance}")
         return
 
     # Deduct from wallet
-    c.execute("UPDATE contributors SET wallet_balance = wallet_balance - ? WHERE id = ?", (total_value, contributor_id))
+    c.execute("UPDATE contributors SET wallet_balance = wallet_balance - %s WHERE id = %s", (total_value, contributor_id))
 
     # Insert dataset
     c.execute('''
         INSERT INTO datasets (contributor_id, name, description, total_value)
-        VALUES (?, ?, ?, ?)
+        VALUES (%s, %s, %s, %s)
+        RETURNING id
     ''', (contributor_id, name, description, total_value))
-    dataset_id = c.lastrowid
+    dataset_id = c.fetchone()[0]
 
     # Fetch all annotator IDs
     c.execute("SELECT id FROM users")
@@ -189,7 +205,7 @@ def upload_dataset(session):
         # Skip if already inserted
         c.execute('''
             SELECT 1 FROM data
-            WHERE dataset_id = ? AND file_name = ?
+            WHERE dataset_id = %s AND file_name = %s
         ''', (dataset_id, file))
         if c.fetchone():
             print(f"Skipping duplicate file: {file}")
@@ -204,16 +220,17 @@ def upload_dataset(session):
         # Insert file into data table
         c.execute('''
             INSERT INTO data (dataset_id, cid, file_name, value)
-            VALUES (?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s)
+            RETURNING id
         ''', (dataset_id, cid, file, value_per_file))
-        data_id = c.lastrowid
+        data_id = c.fetchone()[0]
 
         # Assign to 3 random annotators
         assigned_annotators = random.sample(annotators, min(3, len(annotators)))
         for annotator_id in assigned_annotators:
             c.execute('''
                 INSERT INTO data_annotator (data_id, annotator_id, status)
-                VALUES (?, ?, 'PENDING')
+                VALUES (%s, %s, 'PENDING')
             ''', (data_id, annotator_id))
 
     conn.commit()
@@ -229,7 +246,8 @@ def annotate_data(session):
     download_folder = f"./downloads_{username}/"
     os.makedirs(download_folder, exist_ok=True)
 
-    conn = sqlite3.connect(DB_FILE)
+    # conn = sqlite3.connect(DB_FILE)
+    conn = get_db_connection()
     c = conn.cursor()
 
     # Fetch all pending files assigned to this annotator
@@ -237,7 +255,7 @@ def annotate_data(session):
         SELECT da.id, d.cid, d.file_name, d.value
         FROM data_annotator da
         JOIN data d ON da.data_id = d.id
-        WHERE da.annotator_id = ? AND da.status = 'PENDING'
+        WHERE da.annotator_id = %s AND da.status = 'PENDING'
     ''', (annotator_id,))
     rows = c.fetchall()
 
@@ -293,14 +311,14 @@ def annotate_data(session):
     timestamp = datetime.utcnow().isoformat()
     c.execute('''
         UPDATE data_annotator
-        SET status = 'ANNOTATED', grade = ?, timestamp = ?
-        WHERE id = ?
+        SET status = 'ANNOTATED', grade = %s, timestamp = %s
+        WHERE id = %s
     ''', (score, timestamp, assignment_id))
 
     # Credit to wallet
     c.execute('''
-        UPDATE users SET wallet_balance = wallet_balance + ?
-        WHERE id = ?
+        UPDATE users SET wallet_balance = wallet_balance + %s
+        WHERE id = %s
     ''', (value, annotator_id))
 
     conn.commit()
@@ -312,10 +330,11 @@ def annotate_data(session):
 def view_earnings(session):
     annotator_id = session['id']
 
-    conn = sqlite3.connect(DB_FILE)
+    # conn = sqlite3.connect(DB_FILE)
+    conn = get_db_connection()
     c = conn.cursor()
 
-    c.execute("SELECT wallet_balance FROM users WHERE id = ?", (annotator_id,))
+    c.execute("SELECT wallet_balance FROM users WHERE id = %s", (annotator_id,))
     balance = c.fetchone()[0]
 
     conn.close()
@@ -324,10 +343,11 @@ def view_earnings(session):
 def view_balance(session):
     contributor_id = session['id']
 
-    conn = sqlite3.connect(DB_FILE)
+    # conn = sqlite3.connect(DB_FILE)
+    conn = get_db_connection()
     c = conn.cursor()
 
-    c.execute("SELECT wallet_balance FROM contributors WHERE id = ?", (contributor_id,))
+    c.execute("SELECT wallet_balance FROM contributors WHERE id = %s", (contributor_id,))
     balance = c.fetchone()[0]
 
     conn.close()
@@ -336,11 +356,12 @@ def view_balance(session):
 # ------------------ VIEW RESULTS ------------------
 def view_results(session):
     contributor_id = session['id']
-    conn = sqlite3.connect(DB_FILE)
+    # conn = sqlite3.connect(DB_FILE)
+    conn = get_db_connection()
     c = conn.cursor()
 
     # Fetch all datasets by this contributor
-    c.execute("SELECT id, name FROM datasets WHERE contributor_id = ?", (contributor_id,))
+    c.execute("SELECT id, name FROM datasets WHERE contributor_id = %s", (contributor_id,))
     datasets = c.fetchall()
 
     if not datasets:
@@ -356,7 +377,7 @@ def view_results(session):
         c.execute('''
             SELECT d.id, d.file_name
             FROM data d
-            WHERE d.dataset_id = ?
+            WHERE d.dataset_id = %s
         ''', (dataset_id,))
         files = c.fetchall()
 
@@ -364,7 +385,7 @@ def view_results(session):
             # Get the grade for this file (only one expected)
             c.execute('''
                 SELECT grade FROM data_annotator
-                WHERE data_id = ?
+                WHERE data_id = %s
             ''', (data_id,))
             grades = c.fetchall()
 
