@@ -9,7 +9,7 @@ from datetime import datetime
 
 # ------------------ UTILS ------------------
 DB_FILE = 'platform.db'
-LIGHTHOUSE_API_KEY = "03e85330.b6a227873ffa49d9a9b6899782736cdf"  # TODO: Replace with your Lighthouse API key
+LIGHTHOUSE_API_KEY = "03e85330.b6a227873ffa49d9a9b6899782736cdf"
 LIGHTHOUSE_ENDPOINT = "https://node.lighthouse.storage/api/v0/add"
 
 def hash_password(password):
@@ -208,12 +208,13 @@ def upload_dataset(session):
         ''', (dataset_id, cid, file, value_per_file))
         data_id = c.lastrowid
 
-        # Assign to one annotator evenly
-        assigned_annotator = annotators[idx % num_annotators]
-        c.execute('''
-            INSERT INTO data_annotator (data_id, annotator_id, status)
-            VALUES (?, ?, 'PENDING')
-        ''', (data_id, assigned_annotator))
+        # Assign to 3 random annotators
+        assigned_annotators = random.sample(annotators, min(3, len(annotators)))
+        for annotator_id in assigned_annotators:
+            c.execute('''
+                INSERT INTO data_annotator (data_id, annotator_id, status)
+                VALUES (?, ?, 'PENDING')
+            ''', (data_id, annotator_id))
 
     conn.commit()
     conn.close()
@@ -365,12 +366,15 @@ def view_results(session):
                 SELECT grade FROM data_annotator
                 WHERE data_id = ?
             ''', (data_id,))
-            grade = c.fetchone()
+            grades = c.fetchall()
 
-            if not grade or grade[0] is None:
-                grade_display = "<not annotated>"
+            if not grades:
+                grade_display = "<not assigned>"
             else:
-                grade_display = str(grade[0])
+                grade_display = ", ".join(
+                    str(g[0]) if g[0] is not None else "<not annotated>"
+                    for g in grades
+                )
 
             print(f"{file_name:<40}  Score: {grade_display}")
 
