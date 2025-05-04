@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 # ------------------ UTILS ------------------
 load_dotenv()
 
-LIGHTHOUSE_API_KEY = "03e85330.b6a227873ffa49d9a9b6899782736cdf"
+LIGHTHOUSE_API_KEY = os.getenv("LIGHTHOUSE_API_KEY")
 LIGHTHOUSE_ENDPOINT = "https://node.lighthouse.storage/api/v0/add"
 
 def get_db_connection():
@@ -325,6 +325,14 @@ def annotate_data(session):
     conn.close()
 
     print(f"✅ Saved rating {score} for {file_name}. ${value:.2f} added to your balance.")
+
+    print("⬆️ Uploading your annotated document back to Lighthouse…")
+    new_cid = upload_file_to_ipfs(download_path)
+    if new_cid:
+        print(f"✅ Annotated file pinned under CID: {new_cid}")
+        # optional: store new_cid in your database if you create an `annotated_cid` column
+    else:
+        print("⚠️ Failed to re-upload annotated file.")
 
 # ------------------ VIEW MONEY ------------------
 def view_earnings(session):
