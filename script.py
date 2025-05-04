@@ -12,8 +12,12 @@ from dotenv import load_dotenv
 # ------------------ UTILS ------------------
 load_dotenv()
 
-LIGHTHOUSE_API_KEY = os.getenv("LIGHTHOUSE_API_KEY")
-LIGHTHOUSE_ENDPOINT = "https://node.lighthouse.storage/api/v0/add"
+# lighthouse
+# LIGHTHOUSE_API_KEY = os.getenv("LIGHTHOUSE_API_KEY")
+# LIGHTHOUSE_ENDPOINT = "https://node.lighthouse.storage/api/v0/add"
+
+# kubo
+IPFS_API_URL = os.getenv("IPFS_API_URL", "http://127.0.0.1:5001/api/v0")
 
 def get_db_connection():
     return psycopg2.connect(
@@ -55,7 +59,6 @@ def login(role):
     username = input("Username: ")
     password = getpass.getpass("Password: ")
 
-    # conn = sqlite3.connect(DB_FILE)
     conn = get_db_connection()
     c = conn.cursor()
     table = 'users' if role == 'annotator' else 'contributors'
@@ -142,16 +145,30 @@ def annotator_menu(session):
             print("Invalid input.")
 
 # ------------------ UPLOAD ------------------
+# kubo
 def upload_file_to_ipfs(filepath):
     with open(filepath, 'rb') as f:
-        files = {'file': (os.path.basename(filepath), f)}
-        headers = {'Authorization': f'Bearer {LIGHTHOUSE_API_KEY}'}
-        response = requests.post(LIGHTHOUSE_ENDPOINT, files=files, headers=headers)
+        response = requests.post(
+            f"{IPFS_API_URL}/add",
+            files={'file': f}
+        )
         if response.status_code == 200:
             return response.json()['Hash']
         else:
             print(f"Failed to upload {filepath} to IPFS. Status: {response.status_code}")
             return None
+
+# lighthouse
+# def upload_file_to_ipfs(filepath):
+#     with open(filepath, 'rb') as f:
+#         files = {'file': (os.path.basename(filepath), f)}
+#         headers = {'Authorization': f'Bearer {LIGHTHOUSE_API_KEY}'}
+#         response = requests.post(LIGHTHOUSE_ENDPOINT, files=files, headers=headers)
+#         if response.status_code == 200:
+#             return response.json()['Hash']
+#         else:
+#             print(f"Failed to upload {filepath} to IPFS. Status: {response.status_code}")
+#             return None
 
 def upload_dataset(session):
     contributor_id = session['id']
@@ -278,7 +295,8 @@ def annotate_data(session):
         return
 
     assignment_id, cid, file_name, value = rows[selection - 1]
-    file_url = f"https://gateway.lighthouse.storage/ipfs/{cid}"
+    # file_url = f"https://gateway.lighthouse.storage/ipfs/{cid}"       # lighthouse
+    file_url = f"http://localhost:8080/ipfs/{cid}"                      # kubo
     download_path = os.path.join(download_folder, file_name)
 
     print(f"⬇️ Downloading {file_name} from IPFS...")
@@ -326,11 +344,11 @@ def annotate_data(session):
 
     print(f"✅ Saved rating {score} for {file_name}. ${value:.2f} added to your balance.")
 
+    # re-upload file to ipfs
     print("⬆️ Uploading your annotated document back to Lighthouse…")
     new_cid = upload_file_to_ipfs(download_path)
     if new_cid:
         print(f"✅ Annotated file pinned under CID: {new_cid}")
-        # optional: store new_cid in your database if you create an `annotated_cid` column
     else:
         print("⚠️ Failed to re-upload annotated file.")
 
@@ -338,7 +356,6 @@ def annotate_data(session):
 def view_earnings(session):
     annotator_id = session['id']
 
-    # conn = sqlite3.connect(DB_FILE)
     conn = get_db_connection()
     c = conn.cursor()
 
@@ -351,7 +368,6 @@ def view_earnings(session):
 def view_balance(session):
     contributor_id = session['id']
 
-    # conn = sqlite3.connect(DB_FILE)
     conn = get_db_connection()
     c = conn.cursor()
 
@@ -364,7 +380,6 @@ def view_balance(session):
 # ------------------ VIEW RESULTS ------------------
 def view_results(session):
     contributor_id = session['id']
-    # conn = sqlite3.connect(DB_FILE)
     conn = get_db_connection()
     c = conn.cursor()
 
